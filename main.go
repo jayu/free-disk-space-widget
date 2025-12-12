@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/getlantern/systray"
@@ -43,8 +44,24 @@ func updateFreeSpace() {
 		return
 	}
 
+	re = regexp.MustCompile(`Container Total Space:\s+[\d.]+\s+GB\s+\((\d+)\s+Bytes\)`)
+	matches = re.FindStringSubmatch(string(output))
+	if len(matches) < 2 {
+		fmt.Println("could not find total space in diskutil output")
+		return
+	}
+
+	var totalBytes int64
+	_, err = fmt.Sscanf(matches[1], "%d", &totalBytes)
+	if err != nil {
+		fmt.Printf("error parsing total space: %v", err)
+		return
+	}
+
+	free := float64(freeBytes) / float64(totalBytes) * 100.0
+
 	freeGB := formatBytesToGb(freeBytes)
-	systray.SetTitle(diskEmoji + " " + freeGB + " GB")
+	systray.SetTitle(diskEmoji + " " + freeGB + " GB" + " (" + strconv.FormatFloat(free, 'f', 2, 64) + "% free)")
 	tooltip := fmt.Sprintf("Free disk space is %s GB (%d Bytes)", freeGB, freeBytes)
 	systray.SetTooltip(tooltip)
 
