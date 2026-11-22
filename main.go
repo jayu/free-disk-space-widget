@@ -1,58 +1,79 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"os/exec"
-	"regexp"
+	"log"
+	"os"
+	"syscall"
 	"time"
 
 	"github.com/getlantern/systray"
 )
 
+const diskIcon = "⛁"
+
+type options struct {
+	color    bool
+	warn     float64
+	critical float64
+}
+
 func main() {
-	systray.Run(onReady, onExit)
+	var opts options
+	flag.BoolVar(&opts.color, "color", false, "show yellow and red low-space indicators")
+	flag.Float64Var(&opts.warn, "warn", 20, "free-space percentage at or below which to show yellow")
+	flag.Float64Var(&opts.critical, "err", 10, "free-space percentage at or below which to show red")
+	flag.Parse()
+	if flag.NArg() != 0 || !opts.validThresholds() {
+		fmt.Fprintln(os.Stderr, "Use flags only, with thresholds satisfying 0 <= -err < -warn <= 100.")
+		flag.Usage()
+		os.Exit(2)
+	}
+	systray.Run(func() { onReady(opts) }, nil)
 }
 
-func formatBytesToGb(bytes int64) string {
-	return fmt.Sprintf("%.2f", float64(bytes)/1024/1024/1024)
+func (o options) validThresholds() bool {
+	return o.critical >= 0 && o.critical < o.warn && o.warn <= 100
 }
 
-var diskEmoji = "⛁"
+func (o options) icon(freePercent float64) string {
+	switch {
+	case o.color && freePercent <= o.critical:
+		return "🔴"
+	case o.color && freePercent <= o.warn:
+		return "🟡"
+	default:
+		return diskIcon
+	}
+}
 
-func updateFreeSpace() {
-	process := exec.Command("diskutil", "info", "/")
-	process.Wait()
-	output, err := process.CombinedOutput()
+func readDiskSpace() (freeBytes uint64, freePercent float64, err error) {
+	var stats syscall.Statfs_t
+	if err := syscall.Statfs("/", &stats); err != nil {
+		return 0, 0, err
+	}
+	if stats.Bsize == 0 || stats.Blocks == 0 || stats.Bavail > stats.Blocks {
+		return 0, 0, fmt.Errorf("invalid capacity for startup filesystem")
+	}
+	return stats.Bavail * uint64(stats.Bsize), 100 * float64(stats.Bavail) / float64(stats.Blocks), nil
+}
 
+func updateFreeSpace(opts options) {
+	freeBytes, freePercent, err := readDiskSpace()
 	if err != nil {
-		fmt.Printf("error running diskutil: %v\nOutput: %s", err, string(output))
+		log.Printf("Reading free disk space: %v", err)
+		systray.SetTitle(diskIcon + " —")
+		systray.SetTooltip("Free disk space unavailable")
 		return
 	}
-
-	re := regexp.MustCompile(`Container Free Space:\s+[\d.]+\s+GB\s+\((\d+)\s+Bytes\)`)
-	matches := re.FindStringSubmatch(string(output))
-	if len(matches) < 2 {
-		fmt.Println("could not find free space in diskutil output")
-		return
-	}
-
-	var freeBytes int64
-	_, err = fmt.Sscanf(matches[1], "%d", &freeBytes)
-	if err != nil {
-		fmt.Printf("error parsing free space: %v", err)
-		return
-	}
-
-	freeGB := formatBytesToGb(freeBytes)
-	systray.SetTitle(diskEmoji + " " + freeGB + " GB")
-	tooltip := fmt.Sprintf("Free disk space is %s GB (%d Bytes)", freeGB, freeBytes)
-	systray.SetTooltip(tooltip)
-
+	freeSpace := fmt.Sprintf("%.0f GB", float64(freeBytes)/1e9)
+	systray.SetTitle(opts.icon(freePercent) + " " + freeSpace)
+	systray.SetTooltip(fmt.Sprintf("%s, %.0f%% Free", freeSpace, freePercent))
 }
 
-func onReady() {
-
-	systray.SetTitle(diskEmoji + " Init")
+func onReady(opts options) {
+	systray.SetTitle(diskIcon + " Init")
 	mQuit := systray.AddMenuItem("Quit", "Quit the whole app")
 
 	go func() {
@@ -61,17 +82,9 @@ func onReady() {
 	}()
 
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			updateFreeSpace()
+		for {
+			updateFreeSpace(opts)
+			time.Sleep(10 * time.Second)
 		}
 	}()
-
-	updateFreeSpace()
-}
-
-func onExit() {
-	// clean up here
 }
