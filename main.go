@@ -69,7 +69,7 @@ func updateFreeSpace(opts options) {
 	}
 	freeGiB := float64(freeBytes) / (1 << 30)
 	systray.SetTitle(fmt.Sprintf("%s %.2f GiB", opts.icon(freePercent), freeGiB))
-	systray.SetTooltip(fmt.Sprintf("%.2f GiB free (%.2f%%, %d bytes)", freeGiB, freePercent, freeBytes))
+	systray.SetTooltip(fmt.Sprintf("%.2f%%", freePercent))
 }
 
 func onReady(opts options) {
